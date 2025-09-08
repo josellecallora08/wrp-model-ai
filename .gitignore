@@ -1,0 +1,53 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.env
+.venv/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Data and model artifacts
+*.h5
+*.hdf5
+*.pkl
+*.joblib
+*.npy
+*.npz
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# Audio data
+data/audio/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
+# Model output directory
+models/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# CSVs (if generated)
+labels.csv
+
+# VSCode settings
+.vscode/
+
+# Python egg info
+*.egg-info/
+dist/
+build
