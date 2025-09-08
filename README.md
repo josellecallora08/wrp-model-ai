@@ -1,20 +1,19 @@
-.
+# 🎙️ wrp-model-ai
 
-🎙️ wrp-model-ai
+A minimal pipeline to train and use a machine learning model for **classifying audio recordings** into categories:
 
-A minimal pipeline to train and use a machine learning model for classifying audio recordings into categories:
+- `very bad`  
+- `bad`  
+- `good`  
+- `very good`  
 
-very bad
+This project uses Python, `librosa` for audio feature extraction, and `scikit-learn` for classification.
 
-bad
+---
 
-good
+## 📂 Project Structure
 
-very good
-
-This project uses Python, librosa for audio feature extraction, and scikit-learn for classification.
-
-📂 Project Structure
+```
 wrp-model-ai/
 │── main.py               # Train + evaluate (cross-validation)
 │── main_fit_only.py      # Train on all data, no evaluation
@@ -30,87 +29,107 @@ wrp-model-ai/
 │
 └── utils/
     └── features.py       # Audio I/O, augmentation, feature extraction
+```
 
-⚙️ Setup
+---
 
-Create and activate a virtual environment:
+## ⚙️ Setup
 
-python3 -m venv venv
-source venv/bin/activate      # macOS/Linux
-venv\Scripts\activate         # Windows
+1. Create and activate a virtual environment:
 
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate      # macOS/Linux
+   venv\Scripts\activate         # Windows
+   ```
 
-Install dependencies:
+2. Install dependencies:
 
-pip install -r requirements.txt
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-🗂 Data Preparation
+---
 
-Your labels.csv must have two columns:
+## 🗂 Data Preparation
 
+Your `labels.csv` must have two columns:
+
+```csv
 file_name,label
 audio1.mp3,very good
 audio2.mp3,good
 audio3.mp3,bad
 audio4.mp3,very bad
+```
 
+- `file_name` → must exactly match the audio filename in `data/audio/`  
+- `label` → one of: `very bad`, `bad`, `good`, `very good`
 
-file_name → must exactly match the audio filename in data/audio/
+---
 
-label → one of: very bad, bad, good, very good
+## 🚀 Usage
 
-🚀 Usage
-1. Train with Cross-Validation
+### 1. Train with Cross-Validation
 
 Run Leave-One-Out CV (LOOCV) to get evaluation metrics:
 
+```bash
 python main.py
-
+```
 
 You’ll see:
+- Precision / Recall / F1 per class  
+- Confusion matrix  
+- Per-file predictions  
 
-Precision / Recall / F1 per class
+---
 
-Confusion matrix
+### 2. Train Without Evaluation
 
-Per-file predictions
+If you only want to **fit a model and save it**:
 
-2. Train Without Evaluation
-
-If you only want to fit a model and save it:
-
+```bash
 python main_fit_only.py
-
+```
 
 The trained model is saved to:
 
+```
 models/fewshot_audio_clf.joblib
+```
 
-3. Predict on New Audio
+---
+
+### 3. Predict on New Audio
 
 Classify a new file:
 
+```bash
 python predict.py data/audio/your_file.mp3
-
+```
 
 Output example:
 
+```
 Prediction: good
 very bad   -> 0.05
 bad        -> 0.10
 good       -> 0.70
 very good  -> 0.15
+```
 
-🔍 Notes
+---
 
-With very few samples, accuracy will be poor.
+## 🔍 Notes
 
-Collect at least 20–50 recordings per class for meaningful results.
+- With very few samples, accuracy will be poor.  
+- Collect at least **20–50 recordings per class** for meaningful results.  
+- Consider merging into 2 classes (positive/negative) if dataset is too small.  
+- For better results, replace MFCCs with **pretrained embeddings** (e.g., YAMNet, Wav2Vec2).  
 
-Consider merging into 2 classes (positive/negative) if dataset is too small.
+---
 
-For better results, replace MFCCs with pretrained embeddings (e.g., YAMNet, Wav2Vec2).
+## 📝 License
 
-📝 License
-
-Prototype project for testing and learning — no license specified yet.
+Prototype project for testing and learning — no license specified yet.  
