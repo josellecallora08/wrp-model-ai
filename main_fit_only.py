@@ -4,12 +4,13 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import pandas as pd
 from joblib import dump
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.linear_model import LogisticRegression
-
 from utils.features import load_fixed, extract_features, augment_once
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 # ----------------- Config -----------------
 CSV_PATH = "labels.csv"
@@ -98,6 +99,11 @@ if len(rows) < 2:
 X = np.stack([r["x"] for r in rows])
 y = np.array([r["y"] for r in rows])
 
+# ----------------- Split data for evaluation -----------------
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
+)
+
 # ----------------- Build & fit -----------------
 if USE_KNN:
     base_clf = KNeighborsClassifier(n_neighbors=K_FOR_KNN, metric="euclidean")
@@ -108,9 +114,15 @@ pipe = Pipeline([
     ("scaler", StandardScaler()),
     ("clf", base_clf),
 ])
-pipe.fit(X, y)
+pipe.fit(X_train, y_train)
 
-# ----------------- Save bundle -----------------
+# ----------------- Evaluate -----------------
+y_pred = pipe.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Hold-out accuracy: {accuracy:.4f}")
+
+# ----------------- Re-fit on all data & save -----------------
+pipe.fit(X, y)  # Re-fit on the entire dataset for the final model
 os.makedirs(MODEL_DIR, exist_ok=True)
 dump({
     "model": pipe,
@@ -123,4 +135,4 @@ dump({
 print(f"Model trained on {len(rows)} feature rows "
       f"(from {len(df) - missing} audio files; missing={missing})")
 print(f"Saved: {MODEL_PATH}")
-print("Done. (No evaluation was performed.)")
+print("Done.")
