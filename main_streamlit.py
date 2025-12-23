@@ -9,7 +9,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 
-from utils.features import load_fixed, extract_features, augment_once
+from utils.features import load_fixed, extract_features, augment_once, reduce_noise
 
 # -------------------------------
 # Config (mirrors main.py)
@@ -60,6 +60,10 @@ def predict_audio_files(uploaded_files):
     sr = bundle["sr"]
     duration = bundle["duration"]
     id2 = bundle["id_to_label"]
+    use_noise_reduction = bundle.get("noise_reduction", False)
+
+    if use_noise_reduction:
+        st.info("🔇 This model was trained with noise reduction enabled. Applying noise reduction to predictions.")
 
     results = []
     os.makedirs(AUDIO_DIR, exist_ok=True)
@@ -73,6 +77,11 @@ def predict_audio_files(uploaded_files):
 
         try:
             ysig = load_fixed(tmp_path, sr=sr, duration=duration)
+
+            # Apply noise reduction if model was trained with it
+            if use_noise_reduction:
+                ysig = reduce_noise(ysig, sr=sr)
+
             x = extract_features(ysig, sr=sr).reshape(1, -1)
 
             # Predict label
@@ -173,9 +182,12 @@ def append_training_data(corrections_list):
 
 from sklearn.model_selection import train_test_split
 
-def train_pipeline():
+def train_pipeline(use_noise_reduction: bool = False):
     df = pd.read_csv(CSV_PATH)
     st.info(f"📋 Found {len(df)} entries in labels.csv")
+
+    if use_noise_reduction:
+        st.info("🔇 Noise reduction is ENABLED - processing may take longer")
 
     rows = []
     files_not_found = 0
@@ -194,10 +206,15 @@ def train_pipeline():
         # Update progress
         progress = (idx + 1) / len(df)
         progress_bar.progress(progress)
-        status_text.text(f"Processing {idx + 1}/{len(df)}: {r['file_name']}")
+        status_text.text(f"Processing {idx + 1}/{len(df)}: {r['file_name']}" + (" (with noise reduction)" if use_noise_reduction else ""))
         try:
             # Original audio
             ysig = load_fixed(fpath, sr=SR, duration=DURATION)
+
+            # Apply noise reduction if enabled
+            if use_noise_reduction:
+                ysig = reduce_noise(ysig, sr=SR)
+
             x = extract_features(ysig, sr=SR)
             rows.append({"x": x, "y": LABEL_TO_ID[r["label"].strip().lower()], "path": fpath})
 
@@ -259,7 +276,8 @@ def train_pipeline():
         "confusion_matrix": cm.tolist(),
         "training_samples": len(df),
         "feature_samples": len(rows),
-        "trained_at": pd.Timestamp.now().isoformat()
+        "trained_at": pd.Timestamp.now().isoformat(),
+        "noise_reduction": use_noise_reduction,
     }, MODEL_PATH)
 
     return acc, report, cm, y_val, y_pred
@@ -291,6 +309,10 @@ def evaluate_model_accuracy(test_files_dict):
     sr = bundle["sr"]
     duration = bundle["duration"]
     id2 = bundle["id_to_label"]
+    use_noise_reduction = bundle.get("noise_reduction", False)
+
+    if use_noise_reduction:
+        st.info("🔇 This model was trained with noise reduction. Applying to test files.")
 
     y_true = []
     y_pred = []
@@ -329,6 +351,11 @@ def evaluate_model_accuracy(test_files_dict):
 
                 # Extract features and predict
                 ysig = load_fixed(tmp_path, sr=sr, duration=duration)
+
+                # Apply noise reduction if model was trained with it
+                if use_noise_reduction:
+                    ysig = reduce_noise(ysig, sr=sr)
+
                 x = extract_features(ysig, sr=sr).reshape(1, -1)
                 pred_id = int(model.predict(x)[0])
                 predicted_label = id2[pred_id]
@@ -508,12 +535,218 @@ with tab1:
 with tab2:
     st.header("Train a Model")
 
-    audio_files_dict = {
-        "Very Good": st.file_uploader("Upload 'Very Good' audios", type=["wav","mp3"], accept_multiple_files=True, key="vg"),
-        "Good": st.file_uploader("Upload 'Good' audios", type=["wav","mp3"], accept_multiple_files=True, key="g"),
-        "Bad": st.file_uploader("Upload 'Bad' audios", type=["wav","mp3"], accept_multiple_files=True, key="b"),
-        "Very Bad": st.file_uploader("Upload 'Very Bad' audios", type=["wav","mp3"], accept_multiple_files=True, key="vb"),
-    }
+    # Initialize session state for file management
+    if "train_files" not in st.session_state:
+        st.session_state.train_files = {"Very Good": [], "Good": [], "Bad": [], "Very Bad": []}
+    if "uploader_keys" not in st.session_state:
+        st.session_state.uploader_keys = {"Very Good": 0, "Good": 0, "Bad": 0, "Very Bad": 0}
+
+    def add_files_to_category(category, new_files):
+        """Add new files to a category, avoiding duplicates by name."""
+        if not new_files:
+            return
+        existing_names = {f["name"] for f in st.session_state.train_files[category]}
+        for f in new_files:
+            if f.name not in existing_names:
+                f.seek(0)
+                st.session_state.train_files[category].append({
+                    "name": f.name,
+                    "data": f.read(),
+                    "size": f.size
+                })
+                existing_names.add(f.name)
+
+    def remove_files_from_category(category, indices_to_remove):
+        """Remove files at specified indices from a category."""
+        st.session_state.train_files[category] = [
+            f for i, f in enumerate(st.session_state.train_files[category])
+            if i not in indices_to_remove
+        ]
+
+    def keep_first_n_files(category, n):
+        """Keep only the first n files in a category."""
+        st.session_state.train_files[category] = st.session_state.train_files[category][:n]
+
+    def clear_category(category):
+        """Clear all files from a category."""
+        st.session_state.train_files[category] = []
+        st.session_state.uploader_keys[category] += 1
+
+    # File upload and management for each category
+    for category in LABEL_ORDER:
+        category_title = category.title()
+        files_in_category = st.session_state.train_files[category_title]
+        file_count = len(files_in_category)
+
+        st.subheader(f"{category_title} ({file_count} files)")
+
+        # Upload section
+        col_upload, col_actions = st.columns([3, 2])
+
+        with col_upload:
+            new_files = st.file_uploader(
+                f"Add '{category_title}' audios",
+                type=["wav", "mp3"],
+                accept_multiple_files=True,
+                key=f"upload_{category_title}_{st.session_state.uploader_keys[category_title]}"
+            )
+            if new_files:
+                add_files_to_category(category_title, new_files)
+                st.session_state.uploader_keys[category_title] += 1
+                st.rerun()
+
+        with col_actions:
+            if file_count > 0:
+                st.write("")  # Spacing
+                action_cols = st.columns(2)
+                with action_cols[0]:
+                    if st.button(f"Clear All", key=f"clear_{category_title}"):
+                        clear_category(category_title)
+                        st.rerun()
+                with action_cols[1]:
+                    if st.button(f"Manage Files", key=f"manage_{category_title}"):
+                        st.session_state[f"show_manager_{category_title}"] = not st.session_state.get(f"show_manager_{category_title}", False)
+                        st.rerun()
+
+        # File management panel (expandable)
+        if file_count > 0 and st.session_state.get(f"show_manager_{category_title}", False):
+            with st.container():
+                st.markdown("---")
+
+                # Quick actions row
+                col1, col2, col3 = st.columns([2, 2, 2])
+
+                with col1:
+                    # Keep first N files
+                    keep_n = st.number_input(
+                        f"Keep first N files",
+                        min_value=1,
+                        max_value=file_count,
+                        value=min(file_count, 500),
+                        key=f"keep_n_{category_title}"
+                    )
+
+                with col2:
+                    st.write("")  # Spacing
+                    st.write("")  # Spacing
+                    if st.button(f"Apply (Keep {keep_n})", key=f"apply_keep_{category_title}"):
+                        keep_first_n_files(category_title, keep_n)
+                        st.success(f"Kept first {keep_n} files")
+                        st.rerun()
+
+                with col3:
+                    st.write("")  # Spacing
+                    st.write("")  # Spacing
+                    if st.button("Close Manager", key=f"close_manager_{category_title}"):
+                        st.session_state[f"show_manager_{category_title}"] = False
+                        st.rerun()
+
+                # Show file list with selection
+                st.markdown(f"**Files in {category_title}:**")
+
+                # Initialize selection state
+                if f"selected_{category_title}" not in st.session_state:
+                    st.session_state[f"selected_{category_title}"] = set()
+
+                # Select/Deselect all
+                sel_col1, sel_col2, sel_col3 = st.columns([1, 1, 2])
+                with sel_col1:
+                    if st.button("Select All", key=f"sel_all_{category_title}"):
+                        st.session_state[f"selected_{category_title}"] = set(range(file_count))
+                        st.rerun()
+                with sel_col2:
+                    if st.button("Deselect All", key=f"desel_all_{category_title}"):
+                        st.session_state[f"selected_{category_title}"] = set()
+                        st.rerun()
+                with sel_col3:
+                    selected_count = len(st.session_state.get(f"selected_{category_title}", set()))
+                    if selected_count > 0:
+                        if st.button(f"Remove Selected ({selected_count})", key=f"remove_sel_{category_title}", type="primary"):
+                            remove_files_from_category(category_title, st.session_state[f"selected_{category_title}"])
+                            st.session_state[f"selected_{category_title}"] = set()
+                            st.success(f"Removed {selected_count} files")
+                            st.rerun()
+
+                # Display files in a scrollable container with checkboxes
+                # Show in batches for performance with large file counts
+                files_per_page = 50
+                total_pages = (file_count + files_per_page - 1) // files_per_page
+
+                if total_pages > 1:
+                    page = st.selectbox(
+                        f"Page (showing {files_per_page} files per page)",
+                        range(1, total_pages + 1),
+                        key=f"page_{category_title}"
+                    ) - 1
+                else:
+                    page = 0
+
+                start_idx = page * files_per_page
+                end_idx = min(start_idx + files_per_page, file_count)
+
+                for i in range(start_idx, end_idx):
+                    f = files_in_category[i]
+                    col_check, col_name, col_size = st.columns([0.5, 3, 1])
+                    with col_check:
+                        is_selected = i in st.session_state.get(f"selected_{category_title}", set())
+                        if st.checkbox("", value=is_selected, key=f"check_{category_title}_{i}", label_visibility="collapsed"):
+                            st.session_state.setdefault(f"selected_{category_title}", set()).add(i)
+                        else:
+                            st.session_state.setdefault(f"selected_{category_title}", set()).discard(i)
+                    with col_name:
+                        st.text(f"{i+1}. {f['name']}")
+                    with col_size:
+                        size_kb = f['size'] / 1024
+                        st.text(f"{size_kb:.1f} KB")
+
+                st.markdown("---")
+
+    # Summary of all files
+    st.subheader("Summary")
+    summary_cols = st.columns(4)
+    total_files = 0
+    for i, category in enumerate(LABEL_ORDER):
+        category_title = category.title()
+        count = len(st.session_state.train_files[category_title])
+        total_files += count
+        with summary_cols[i]:
+            st.metric(category_title, count)
+
+    st.info(f"Total files ready for training: {total_files}")
+
+    # Prepare audio_files_dict for training (convert stored data back to file-like objects)
+    class FileWrapper:
+        """Wrapper to make stored file data behave like an uploaded file."""
+        def __init__(self, name, data):
+            self.name = name
+            self._data = data
+
+        def getbuffer(self):
+            return self._data
+
+    audio_files_dict = {}
+    for category in LABEL_ORDER:
+        category_title = category.title()
+        audio_files_dict[category_title] = [
+            FileWrapper(f["name"], f["data"])
+            for f in st.session_state.train_files[category_title]
+        ]
+
+    # Training options
+    st.subheader("Training Options")
+    col_opt1, col_opt2 = st.columns([1, 2])
+    with col_opt1:
+        use_noise_reduction = st.checkbox(
+            "Enable Noise Reduction",
+            value=False,
+            key="train_noise_reduction",
+            help="Reduce background noise before feature extraction. Recommended when recordings have varying background noise levels."
+        )
+    with col_opt2:
+        if use_noise_reduction:
+            st.info("🔇 **Noise Reduction ON**: The model will focus more on voice characteristics rather than background noise. Processing will take longer.")
+        else:
+            st.caption("Noise reduction is OFF. Enable it if your recordings have inconsistent background noise.")
 
     if st.button("🚀 Train Model"):
         df = save_training_data(audio_files_dict)
@@ -524,8 +757,8 @@ with tab2:
         st.success("✅ Audio files saved and labels.csv generated!")
         st.dataframe(df)
 
-        with st.spinner("Training model... This may take a moment."):
-            results = train_pipeline()
+        with st.spinner("Training model... This may take a moment." + (" (with noise reduction)" if use_noise_reduction else "")):
+            results = train_pipeline(use_noise_reduction=use_noise_reduction)
 
         if results and results[0] is not None:
             acc, report, cm, y_val, y_pred = results
@@ -786,6 +1019,13 @@ with tab3:
                         st.write("**Trained At:**")
                         st.code("N/A")
 
+                # Noise reduction status
+                noise_reduction = bundle.get("noise_reduction", False)
+                if noise_reduction:
+                    st.success("🔇 **Noise Reduction:** Enabled - Model focuses on voice characteristics")
+                else:
+                    st.caption("🔊 **Noise Reduction:** Disabled")
+
                 # Labels the model knows
                 st.write("**Trained Labels:**")
                 id_to_label = bundle.get("id_to_label", {})
@@ -1012,6 +1252,10 @@ with tab5:
                 sr = bundle["sr"]
                 duration = bundle["duration"]
                 id2 = bundle["id_to_label"]
+                use_noise_reduction = bundle.get("noise_reduction", False)
+
+                if use_noise_reduction:
+                    st.info("🔇 This model was trained with noise reduction. Applying to uploaded files.")
 
                 predictions = []
                 for f in improve_files:
@@ -1028,6 +1272,11 @@ with tab5:
 
                         # Extract features and predict
                         ysig = load_fixed(tmp_path, sr=sr, duration=duration)
+
+                        # Apply noise reduction if model was trained with it
+                        if use_noise_reduction:
+                            ysig = reduce_noise(ysig, sr=sr)
+
                         x = extract_features(ysig, sr=sr).reshape(1, -1)
                         pred_id = int(model.predict(x)[0])
                         predicted_label = id2[pred_id]

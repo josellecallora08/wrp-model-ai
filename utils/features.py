@@ -77,6 +77,58 @@ import soundfile as sf
 import librosa
 
 # ------------------------------------------------------------
+# Noise Reduction
+# ------------------------------------------------------------
+def reduce_noise(y: np.ndarray, sr: int = 16000) -> np.ndarray:
+    """
+    Reduce background noise from audio signal.
+    Uses spectral gating to suppress noise while preserving voice.
+    """
+    try:
+        import noisereduce as nr
+        # Use stationary noise reduction - works well for consistent background noise
+        y_reduced = nr.reduce_noise(
+            y=y,
+            sr=sr,
+            stationary=True,
+            prop_decrease=0.75,  # How much to reduce noise (0-1)
+            n_fft=1024,
+            hop_length=256,
+        )
+        return y_reduced.astype(np.float32)
+    except ImportError:
+        # Fallback: simple spectral subtraction if noisereduce not installed
+        import warnings
+        warnings.warn("noisereduce not installed. Using basic spectral subtraction.")
+        return _basic_noise_reduction(y, sr)
+
+def _basic_noise_reduction(y: np.ndarray, sr: int) -> np.ndarray:
+    """Basic spectral subtraction fallback when noisereduce is not available."""
+    # Estimate noise from first 0.5 seconds (assuming it starts with silence/noise)
+    noise_sample_len = int(sr * 0.5)
+    if len(y) < noise_sample_len * 2:
+        return y  # Audio too short, return as-is
+
+    # STFT
+    n_fft = 1024
+    hop_length = 256
+    S = librosa.stft(y, n_fft=n_fft, hop_length=hop_length)
+    mag, phase = np.abs(S), np.angle(S)
+
+    # Estimate noise spectrum from beginning
+    noise_frames = noise_sample_len // hop_length
+    noise_mag = np.mean(mag[:, :noise_frames], axis=1, keepdims=True)
+
+    # Spectral subtraction with flooring
+    mag_reduced = np.maximum(mag - 1.5 * noise_mag, 0.1 * mag)
+
+    # Reconstruct
+    S_reduced = mag_reduced * np.exp(1j * phase)
+    y_reduced = librosa.istft(S_reduced, hop_length=hop_length, length=len(y))
+
+    return y_reduced.astype(np.float32)
+
+# ------------------------------------------------------------
 # Audio Loader
 # ------------------------------------------------------------
 def load_fixed(path: str, sr: int = 16000, duration: float = 10.0, mono: bool = True) -> np.ndarray:
